@@ -62,7 +62,7 @@ export class Physics {
       }
     }
 
-    console.log(`Candidates :${candidates.length}`);
+    // console.log(`Candidates :${candidates.length}`);
 
     return candidates;
   }
