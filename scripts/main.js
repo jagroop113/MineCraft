@@ -75,7 +75,8 @@ function setUpLights() {
   scene.add(sun, ambient);
 }
 // !--- MULTIPLAYER  ---
-const socket = new WebSocket("http://157.119.42.36:3001/");
+// const socket = new WebSocket("http://157.119.42.36:3001/");
+const socket = new WebSocket("https://mine.v2stech.in/");
 
 let myId = null;
 const otherPlayers = {};
@@ -100,7 +101,7 @@ function syncPlayers(players) {
 
     if (!otherPlayers[id]) {
       const geo = new THREE.BoxGeometry(1, 2, 1);
-      const mat = new THREE.MeshStandardMaterial({ color: 'red' });
+      const mat = new THREE.MeshStandardMaterial({ color: 'red'});
       const mesh = new THREE.Mesh(geo, mat);
       
       scene.add(mesh);
