@@ -1,6 +1,6 @@
 import * as THREE from "three";
 
-import { blocks } from "./blocks";
+import { isSolid } from "./blocks";
 import { Player } from "./player";
 
 const collisionMaterial = new THREE.MeshBasicMaterial({
@@ -20,6 +20,10 @@ const collisiGeometry = new THREE.BoxGeometry(1.001, 1.001, 1.001);
 export class Physics {
   // Acceleration due to gravityMore actions
   gravity = 32;
+  // Caps falling speed so a long fall can't skip through a block in one step
+  terminalVelocity = 50;
+  // Collision/contact debug meshes; creating them every step is costly, so off by default
+  showHelpers = false;
 
   // Physic simulation rate
   simulationRate = 250;
@@ -53,16 +57,16 @@ export class Physics {
       for (let y = extents.y.min; y <= extents.y.max; y++) {
         for (let z = extents.z.min; z <= extents.z.max; z++) {
           const block = world.getBlock(x, y, z);
-          if (block && block.id !== blocks.empty.id) {
+          if (block && isSolid(block.id)) {
             const blockPos = { x, y, z };
             candidates.push(blockPos);
-            this.addCollisionHelper(blockPos);
+            if (this.showHelpers) this.addCollisionHelper(blockPos);
           }
         }
       }
     }
 
-    console.log(`Candidates :${candidates.length}`);
+    // console.log(`Candidates :${candidates.length}`);
 
     return candidates;
   }
@@ -107,14 +111,14 @@ export class Physics {
           normal,
           overlap,
         });
-        this.addContactPointerHelper(closestPoint);
+        if (this.showHelpers) this.addContactPointerHelper(closestPoint);
       }
     }
 
     return collisions;
   }
   resolveCollisions(collisions, player) {
-    collisions.sort((a, b) => a.overlap < b.overlap);
+    collisions.sort((a, b) => a.overlap - b.overlap);
 
     for (const collision of collisions) {
       if(!this.pointInPlayerBoundingCylinder(collision.contactPoint,player))
@@ -146,7 +150,10 @@ export class Physics {
   update(dt, player, world) {
     this.accumulator += dt;
     while (this.accumulator >= this.stepSize) {
-      player.velocity.y -= this.gravity * this.stepSize;
+      player.velocity.y = Math.max(
+        player.velocity.y - this.gravity * this.stepSize,
+        -this.terminalVelocity
+      );
       player.applyInput(this.stepSize);
       this.detectCollisions(player, world);
       this.accumulator -= this.stepSize;
