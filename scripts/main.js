@@ -1,12 +1,17 @@
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/Addons.js";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { World } from "./world";
-import Stats from 'stats.js';
-import { createUI } from "./ui";
 import { Player } from "./player";
 import { Physics } from "./physics";
+import { NPC } from "./Npc/npc";
+import { BuildingGame } from "./building/game";
+import { connectMultiplayer } from "./multiplayer";
 
-console.log("Start");
+// ?debug in the URL enables the developer tools (terrain GUI, stats, helpers, free camera)
+const debug = new URLSearchParams(window.location.search).has("debug");
+
+// Large frame gaps (e.g. returning to a background tab) are clamped so physics can't jump
+const MAX_FRAME_SECONDS = 0.1;
 
 //!Render Setup
 
@@ -27,32 +32,36 @@ const camera = new THREE.PerspectiveCamera(
 camera.position.set(-32, 16, -32);
 
 
-//!Orbit control
+//!Orbit control (debug free camera)
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(16, 0, 16)
 controls.update()
 
-//!scene
+//!scene (sky colour, fog and lighting come from the environment's day/night cycle)
 const scene = new THREE.Scene();
 
-//!World 
+//!World (endless: chunks stream in around the player once a save is loaded)
 const world = new World()
-world.generate()
 scene.add(world)
 
 
 //!Physics
 
 const physics = new Physics(scene)
+physics.showHelpers = debug
 
 
 //!Player
 const player = new Player(scene)
+player.cameraHelper.visible = debug
+player.boundHelper.visible = debug
 
-//!FPS
-const stats = new Stats()
-document.body.append(stats.dom)
+
+//! NPC
+//* created next to the player once the world has loaded (see game.start below)
+let npcs = [];
+
 
 //!Lights
 
@@ -73,73 +82,54 @@ function setUpLights() {
   ambient.intensity = 0.1;
 
   scene.add(sun, ambient);
+  return { sun, ambient };
 }
+const { sun, ambient } = setUpLights();
+
+//! Game (building, inventory, menus, saving, environment, wildlife, mobile controls)
+const game = new BuildingGame({ scene, world, player, renderer, sun, ambient, debug })
+
 // !--- MULTIPLAYER  ---
-// const socket = new WebSocket("http://157.119.42.36:3001/");
-const socket = new WebSocket("https://mine.v2stech.in/");
+// Set VITE_MULTIPLAYER_URL (see .env.example) to connect; without it the game is single-player
+const multiplayerUrl = import.meta.env.VITE_MULTIPLAYER_URL;
+if (multiplayerUrl) connectMultiplayer({ url: multiplayerUrl, scene, player });
 
-let myId = null;
-const otherPlayers = {};
-
-socket.onmessage = (e) => {
-  const data = JSON.parse(e.data);
-
-  if (data.type === "id") {
-    myId = data.id;
-    console.log(data.id);
-    
-  }
-
-  if (data.type === "players") {
-    syncPlayers(data.players);
-  }
-};
-
-function syncPlayers(players) {
-  for (const id in players) {
-    if (id === myId) continue;
-
-    if (!otherPlayers[id]) {
-      const geo = new THREE.BoxGeometry(1, 2, 1);
-      const mat = new THREE.MeshStandardMaterial({ color: 'red'});
-      const mesh = new THREE.Mesh(geo, mat);
-      
-      scene.add(mesh);
-      otherPlayers[id] = mesh;
-    }
-
-    const p = players[id];
-    otherPlayers[id].position.set(p.x, p.y, p.z);
-  }
+//!Debug tools (loaded on demand so they stay out of the normal bundle)
+let stats = null;
+if (debug) {
+  // Console / automated-test access to the running game
+  window.__game = game;
+  window.__physics = physics;
+  window.__player = player;
+  Promise.all([import("stats.js"), import("./ui")]).then(([{ default: Stats }, { createUI }]) => {
+    stats = new Stats()
+    document.body.append(stats.dom)
+    const gui = createUI(world, player)
+    // Terrain edits in the GUI regenerate the world, so they need saving too
+    gui.onFinishChange(() => game.worldManager?.markDirty())
+  });
 }
-setInterval(() => {
-  if (!myId) return;
-
-  socket.send(JSON.stringify({
-    type: "move",
-    pos: {
-      x: player.position.x,
-      y: player.position.y,
-      z: player.position.z
-    }
-  }));
-}, 100); // 10 times/sec
 
 
 //Loop
 let prevoiusTime = performance.now()
 function animate() {
   let currentTime = performance.now();
-  let dt = (currentTime - prevoiusTime) / 1000;
+  let dt = Math.min((currentTime - prevoiusTime) / 1000, MAX_FRAME_SECONDS);
   requestAnimationFrame(animate);
 
 
-  physics.update(dt, player, world)
-  //! Update the Fps Stats 
-  stats.update()
+  // Gravity only runs while playing, and only once the ground under the player has loaded
+  if (!game.paused && world.isLoadedAt(player.position.x, player.position.z)) physics.update(dt, player, world)
+  game.update(dt)
+  //! Update the Fps Stats
+  stats?.update()
   player.updateBoundHelper()
-  renderer.render(scene, player.controls.isLocked ? player.camera : camera);
+  player.updatePositionDisplay()
+  controls.enabled = !game.usesPlayerCamera
+  renderer.render(scene, game.usesPlayerCamera ? player.camera : camera);
   world.update(player)
+  for (const npc of npcs) npc.update(dt, world)
   prevoiusTime = currentTime;
 }
 
@@ -156,12 +146,12 @@ window.addEventListener("resize", () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 
 
-  renderer.render(scene, camera);
-
-  stats.update()
+  renderer.render(scene, game.usesPlayerCamera ? player.camera : camera);
 });
 
 
-setUpLights();
-createUI(world, player)
 animate();
+game.start().then(() => {
+  const { x, z } = player.position;
+  npcs = [new NPC(scene, world, x - 4, z - 4), new NPC(scene, world, x + 4, z - 3), new NPC(scene, world, x - 3, z + 4)];
+});

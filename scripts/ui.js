@@ -38,4 +38,6 @@ export function createUI(world, player) {
   gui.onChange(() => {
     world.generate();
   });
+
+  return gui;
 }
