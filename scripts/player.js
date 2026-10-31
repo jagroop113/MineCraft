@@ -1,11 +1,20 @@
 import * as THREE from "three";
 import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
 
+// Reused every physics step instead of allocating
+const _euler = new THREE.Euler(0, 0, 0, "YXZ");
+const _look = new THREE.Euler(0, 0, 0, "YXZ");
+
 export class Player {
   radius = 0.5;
   height = 1.75;
   maxSpeed = 10;
   jumpSpeed = 10;
+  /** Speed multiplier while sprinting (Shift on desktop, the sprint button on touch) */
+  sprintMultiplier = 1.6;
+  sprinting = false;
+  /** Touch controls drive the player without pointer lock */
+  touchActive = false;
   onGround = false;
   input = new THREE.Vector3();
   velocity = new THREE.Vector3();
@@ -37,12 +46,12 @@ export class Player {
 
   get worldVelocity() {
     this.#worldVelocity.copy(this.velocity)
-    this.#worldVelocity.applyEuler(new THREE.Euler(0, this.camera.rotation.y, 0))
+    this.#worldVelocity.applyEuler(_euler.set(0, this.camera.rotation.y, 0))
     return this.#worldVelocity
   }
 
   applyWorldDeltaVelocity(dv) {
-    dv.applyEuler(new THREE.Euler(0, -this.camera.rotation.y, 0))
+    dv.applyEuler(_euler.set(0, -this.camera.rotation.y, 0))
     this.velocity.add(dv)
   }
 
@@ -56,22 +65,46 @@ export class Player {
   }
 
   applyInput(dt) {
-    if (this.controls.isLocked) {
-      this.velocity.x = this.input.x;
-      this.velocity.z = this.input.z;
+    if (this.controls.isLocked || this.touchActive) {
+      const speed = this.sprinting ? this.sprintMultiplier : 1;
+      this.velocity.x = this.input.x * speed;
+      this.velocity.z = this.input.z * speed;
       this.controls.moveRight(this.velocity.x * dt);
       this.controls.moveForward(this.velocity.z * dt);
       this.position.y += this.velocity.y * dt;
-
-      let position = (document.getElementById("player-position").innerHTML =
-        this.toString());
     }
+  }
+
+  // Called once per frame (not per physics step) to keep DOM writes cheap
+  updatePositionDisplay() {
+    this.positionElement ??= document.getElementById("player-position");
+    if (this.positionElement) this.positionElement.textContent = this.toString();
+  }
+
+  /** Stops all movement, e.g. when the game is paused or the window loses focus */
+  clearInput() {
+    this.input.set(0, 0, 0);
+    this.sprinting = false;
+  }
+
+  jump() {
+    if (this.onGround) {
+      this.velocity.y += this.jumpSpeed
+    }
+  }
+
+  /** Turns the view like PointerLockControls does for mouse movement (used by touch look) */
+  look(deltaX, deltaY) {
+    _look.setFromQuaternion(this.camera.quaternion, "YXZ");
+    _look.y -= deltaX * 0.002 * this.controls.pointerSpeed;
+    _look.x -= deltaY * 0.002 * this.controls.pointerSpeed;
+    _look.x = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, _look.x));
+    this.camera.quaternion.setFromEuler(_look);
   }
 
   KeyDown(event) {
     if (!this.controls.isLocked) {
       this.controls.lock();
-      console.log("Locked");
     }
     switch (event.code) {
       case "KeyW":
@@ -91,9 +124,7 @@ export class Player {
         this.velocity.set(0, 0, 0);
         break;
       case "Space":
-        if (this.onGround) {
-          this.velocity.y += this.jumpSpeed
-        }
+        this.jump();
         break;
     }
   }
